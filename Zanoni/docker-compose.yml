@@ -8,6 +8,11 @@ x-hdfs-env: &hdfs-env
   HDFS-SITE.XML_dfs.permissions.enabled: "false"
   HDFS-SITE.XML_dfs.namenode.name.dir: /hadoop/dfs/name
   HDFS-SITE.XML_dfs.datanode.data.dir: /hadoop/dfs/data
+  YARN-SITE.XML_yarn.resourcemanager.hostname: resourcemanager
+
+# NOTA: los servicios SIN "profiles" (HDFS + YARN) arrancan con `docker compose up -d`.
+# Los servicios con profile "extra" (Spark, Kafka, Mongo, Postgres, Jupyter)
+# solo arrancan con: docker compose --profile extra up -d
 
 services:
   # ---------------- HDFS ----------------
@@ -18,13 +23,15 @@ services:
     user: root
     command: ["hdfs", "namenode"]
     ports:
-      - "9870:9870"   # UI web
+      - "9870:9870"   # UI web HDFS
       - "8020:8020"   # RPC
     environment:
       <<: *hdfs-env
-      ENSURE_NAMENODE_DIR: /hadoop/dfs/name
+      # Subdirectorio que no existe en el primer arranque -> fuerza el formateo
+      ENSURE_NAMENODE_DIR: /hadoop/dfs/name/current
     volumes:
       - namenode_data:/hadoop/dfs/name
+      - ../datos:/workspace         # CSV compartido con el host
     networks: [datanet]
 
   datanode:
@@ -42,8 +49,36 @@ services:
       - datanode_data:/hadoop/dfs/data
     networks: [datanet]
 
-  # ---------------- SPARK ----------------
+  # ---------------- YARN ----------------
+  resourcemanager:
+    image: apache/hadoop:3.4.0
+    container_name: resourcemanager
+    hostname: resourcemanager
+    user: root
+    command: ["yarn", "resourcemanager"]
+    depends_on: [namenode]
+    ports:
+      - "8088:8088"   # UI web de YARN
+    environment:
+      <<: *hdfs-env
+    networks: [datanet]
+
+  nodemanager:
+    image: apache/hadoop:3.4.0
+    container_name: nodemanager
+    hostname: nodemanager
+    user: root
+    command: ["yarn", "nodemanager"]
+    depends_on: [resourcemanager]
+    ports:
+      - "8042:8042"   # UI web NodeManager
+    environment:
+      <<: *hdfs-env
+    networks: [datanet]
+
+  # ---------------- SPARK (extra) ----------------
   spark-master:
+    profiles: ["extra"]
     image: bitnamilegacy/spark:3.5
     container_name: spark-master
     environment:
@@ -52,11 +87,12 @@ services:
       SPARK_RPC_ENCRYPTION_ENABLED: "no"
       SPARK_SSL_ENABLED: "no"
     ports:
-      - "8090:8080"   # UI master (8090 en Windows)
-      - "7077:7077"   # Spark master
+      - "8090:8080"
+      - "7077:7077"
     networks: [datanet]
 
   spark-worker:
+    profiles: ["extra"]
     image: bitnamilegacy/spark:3.5
     container_name: spark-worker
     depends_on: [spark-master]
@@ -69,16 +105,17 @@ services:
       SPARK_RPC_ENCRYPTION_ENABLED: "no"
       SPARK_SSL_ENABLED: "no"
     ports:
-      - "8081:8081"   # UI worker
+      - "8081:8081"
     networks: [datanet]
 
-  # ---------------- KAFKA (modo KRaft, sin Zookeeper) ----------------
+  # ---------------- KAFKA (extra) ----------------
   kafka:
+    profiles: ["extra"]
     image: apache/kafka:3.8.0
     container_name: kafka
     hostname: kafka
     ports:
-      - "29092:29092"   # acceso desde Windows (localhost:29092)
+      - "29092:29092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -96,8 +133,9 @@ services:
       - kafka_data:/var/lib/kafka/data
     networks: [datanet]
 
-  # ---------------- MONGODB ----------------
+  # ---------------- MONGODB (extra) ----------------
   mongodb:
+    profiles: ["extra"]
     image: mongo:7.0
     container_name: mongodb
     environment:
@@ -109,13 +147,14 @@ services:
       - mongo_data:/data/db
     networks: [datanet]
 
-  # ---------------- POSTGRES ----------------
+  # ---------------- POSTGRES (extra) ----------------
   postgres:
+    profiles: ["extra"]
     image: postgres:16-alpine
     container_name: postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
+      POSTGRES_USER: sqoopuser
+      POSTGRES_PASSWORD: sqooppassword
       POSTGRES_DB: appdb
     ports:
       - "5432:5432"
@@ -123,8 +162,9 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks: [datanet]
 
-  # ---------------- JUPYTER + PYSPARK (Anaconda) ----------------
+  # ---------------- JUPYTER (extra) ----------------
   jupyter:
+    profiles: ["extra"]
     build:
       context: .
       dockerfile: Dockerfile.jupyter
@@ -132,8 +172,8 @@ services:
     hostname: jupyter
     depends_on: [spark-master]
     ports:
-      - "8888:8888"   # JupyterLab (token: spark)
-      - "4040:4040"   # UI de la app Spark
+      - "8888:8888"
+      - "4040:4040"
     environment:
       SPARK_MASTER: spark://spark-master:7077
     volumes:

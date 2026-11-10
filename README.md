@@ -157,10 +157,20 @@ Entorno :
 
 <img width="1056" height="740" alt="Captura de pantalla 2026-11-10 173258" src="https://github.com/user-attachments/assets/edc52caa-85e5-4d51-8a14-2bc0783a0c81" />
 
-Problemas con jps, me pregunto porque 
-“””
-la imagen oficial apache/hadoop:3.4.0 incluye JRE (Java Runtime Environment) y no un JDK (Java Development Kit). La utilidad jps (Java Virtual Machine Process Status Tool) solo forma parte del JDK, por lo que el archivo binario no existe físicamente dentro del contenedor. 
-“””
+### Comprobación de procesos Java sin `jps`
+
+La imagen oficial `apache/hadoop:3.4.0` incluye un JRE (Java Runtime Environment), pero no un JDK (Java Development Kit). La utilidad `jps` (Java Virtual Machine Process Status Tool) forma parte del JDK y, por tanto, no existe dentro de estos contenedores.
+
+En su lugar, desde PowerShell se comprobó el proceso Java en cada contenedor con este comando:
+
+```powershell
+"namenode", "datanode", "resourcemanager", "nodemanager" | ForEach-Object {
+    Write-Host "`n== $_ ==" -ForegroundColor Green
+    docker exec $_ bash -c "ps aux | grep java | grep -v grep"
+}
+```
+
+El bucle recorre los cuatro contenedores Hadoop y ejecuta `ps` dentro de cada uno para mostrar sus procesos Java. Así se verifican los servicios sin depender de `jps` ni instalar herramientas del JDK en la imagen.
 
 Para la ingesta de datos se entra al namenode: 
 
