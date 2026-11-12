@@ -1,0 +1,11 @@
+name: practica-5075
+
+services:
+  practica:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: ["tail", "-f", "/dev/null"]
