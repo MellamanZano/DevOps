@@ -1,11 +1,33 @@
-<img width="618" height="431" alt="image" src="https://github.com/user-attachments/assets/9f63b986-b277-44b3-80ff-647309de8595" />
+# Pipeline de integridad y preparación KDD
 
-Se empieza con la estructura del projecto :
+Práctica de **integridad criptográfica, saneamiento de datos y perfilado de calidad** para preparar un lote transaccional para su análisis. El flujo usa SHA-256, Python 3.11, pandas, NumPy y Docker Compose.
 
-<img width="735" height="423" alt="image" src="https://github.com/user-attachments/assets/b2052fff-66f0-4c14-8f54-bd96f3f1adee" />
+> **Objetivo:** admitir únicamente ficheros verificados, poner en cuarentena los registros no conformes y documentar la calidad del conjunto final.
 
-El docker con el dockerfile :
+## Contenido
 
+- [Estructura del proyecto](#estructura-del-proyecto)
+- [Entorno Docker](#entorno-docker)
+- [Fase 1: integridad SHA-256](#fase-1-integridad-sha-256)
+- [Fase 2: saneamiento](#fase-2-saneamiento)
+- [Fase 3: perfilado KDD](#fase-3-perfilado-kdd)
+- [Resultados](#resultados)
+
+## Estructura del proyecto
+
+La práctica parte del lote de entrada `raw_batch_202611/` y genera las carpetas de staging, cuarentena, procesamiento y reportes.
+
+![Estructura inicial del proyecto](https://github.com/user-attachments/assets/9f63b986-b277-44b3-80ff-647309de8595)
+
+![Jerarquía de carpetas](https://github.com/user-attachments/assets/b2052fff-66f0-4c14-8f54-bd96f3f1adee)
+
+## Entorno Docker
+
+Compose construye una imagen Python 3.11 con `tree`, pandas y NumPy. El código local se monta en `/app`.
+
+### `docker-compose.yml`
+
+```yaml
 name: practica-5075
 
 services:
@@ -17,8 +39,11 @@ services:
     volumes:
       - .:/app
     command: ["tail", "-f", "/dev/null"]
+```
 
+### `Dockerfile`
 
+```dockerfile
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -32,14 +57,27 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+```
 
+### Arranque
 
+```powershell
+docker compose up -d --build
+docker compose exec practica bash
+```
 
+Al terminar, detén el contenedor con `docker compose down`.
 
-<img width="611" height="406" alt="image" src="https://github.com/user-attachments/assets/fadc602f-a561-42f2-8f1a-29b2f972e4e1" />
+![Entorno de ejecución](https://github.com/user-attachments/assets/fadc602f-a561-42f2-8f1a-29b2f972e4e1)
 
-Aqui se genera un script de python para obtener el sha256 y compararlo con el manifest_checksum :
+## Fase 1: integridad SHA-256
 
+El verificador compara cada fichero del lote con `raw_batch_202611/manifest_checksums.sha256`. Los que coinciden se copian a `staging/verified/`; los que no, se aíslan en `quarantine/tampered/`. El script conserva los originales por defecto y acepta `--mover` para moverlos.
+
+<details>
+<summary>Ver código de <code>01_verificar_integridad.py</code></summary>
+
+```python
 #!/usr/bin/env python3
 """
 01_verificar_integridad.py
@@ -211,27 +249,24 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+```
 
+</details>
 
+La ejecución documentada mostró discrepancias de hash. No se determinó si se debieron al lote o a su descarga; para continuar con las fases siguientes, se copiaron manualmente los CSV de norte y este a `staging/verified/`. Por ello, los resultados de saneamiento no deben interpretarse como una validación exitosa de integridad.
 
+![Resultado de la verificación](https://github.com/user-attachments/assets/355a135f-33c6-49ee-95d2-e2e243e0c9e4)
 
-Lo que hace es tracear las rutas del projecto, crea un logger que da salida al terminal y al fichero logs, se calcula el sha, lee el manifiesto y construye un diccionario con el nombre del fichero y el hash esperado. Copia o mueve un fichero a la carpeta destino, creándola si no existe. Lo interesante es que corriendo este script sale esto :
+![Ficheros preparados para la siguiente fase](https://github.com/user-attachments/assets/b60e8bb2-44f6-48dd-9df7-14451ac2d517)
 
+## Fase 2: saneamiento
 
-<img width="1091" height="280" alt="image" src="https://github.com/user-attachments/assets/355a135f-33c6-49ee-95d2-e2e243e0c9e4" />
+El pipeline lee los CSV verificados, normaliza columnas y tipos, valida fechas y reglas de negocio, elimina duplicados y detecta outliers mediante IQR. Cada registro descartado se conserva en cuarentena con el motivo; los valores secundarios nulos se imputan con la mediana o una categoría explícita.
 
+<details>
+<summary>Ver código de <code>02_pipeline_saneamiento_kdd.py</code></summary>
 
-Es probable que primero hay que sanear los datos y luego se hace el calculo del sha, o hay un error por como se descarga el fichero de github.
-
-Probablemente haya un error.
-
-
-<img width="625" height="554" alt="image" src="https://github.com/user-attachments/assets/b60e8bb2-44f6-48dd-9df7-14451ac2d517" />
-
-Dado el error del hash, se coloca manualmente los archivos en verified, solamente norte y este. 
-
-Script para saneamiento de datos :
-
+```python
 #!/usr/bin/env python3
 """
 02_pipeline_saneamiento_kdd.py  (Fase 2: limpieza, coherencia y outliers)
@@ -478,19 +513,20 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+```
 
+</details>
 
-Este script lee todos los CSV de staging/verified/ como texto (dtype=str), para no perder información antes de validar. Detecta el separador solo, normaliza los nombres de columna y añade origen (la tienda) y linea_origen (la línea del CSV). Si a un fichero le faltan columnas obligatorias (schema drift), lo omite y lo registra. calcula el porcentaje de filas sin ningún nulo. Un registro sin id_transaccion, timestamp, importe_eur o unidades va a cuarentena. Si un id_transaccion se repite, conserva el primero.
+![Registros saneados y anomalías](https://github.com/user-attachments/assets/6a5da10c-ec10-4fdd-9742-908a6e562722)
 
-En este caso, un valor generado por un sensor defectuoso no es un dato real. Se utiliza la mediana para imputar y cada rechazo lleva su motivo_rechazo, con los valores originales sin modificar, para poder auditarlo.
+## Fase 3: perfilado KDD
 
+El último script combina las métricas de integridad y saneamiento, genera estadísticas de `importe_eur` y crea el informe técnico y un resumen JSON.
 
+<details>
+<summary>Ver código de <code>03_perfilado_calidad_kdd.py</code></summary>
 
-<img width="1292" height="430" alt="image" src="https://github.com/user-attachments/assets/6a5da10c-ec10-4fdd-9742-908a6e562722" />
-
-
-Ahora se crea y utiliza el script para la parte 3 :
-
+```python
 #!/usr/bin/env python3
 """
 03_perfilado_calidad_kdd.py  (Fase 3: perfilado KDD e informe de calidad)
@@ -747,14 +783,40 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+```
 
+</details>
 
-El script lee los JSON y el CSV que dejan las fases anteriores. A partir de ello crea un resumen ejecutivo, utiliza las Métricas ISO/IEC 25012. Tambien manejja la distribución de importe_eur desglozado por tienda, el arbol de directorios y conclusiones tecnicas.
+![Ejecución del perfilado](https://github.com/user-attachments/assets/1fe74ec5-ef48-43d9-9637-e06ba890c351)
 
-<img width="1062" height="119" alt="image" src="https://github.com/user-attachments/assets/1fe74ec5-ef48-43d9-9637-e06ba890c351" />
+## Resultados
 
+El perfilado documentado produjo las siguientes métricas:
 
-Perfilado calidad.json :
+| Indicador | Resultado |
+|---|---:|
+| Integridad criptográfica | 0 de 3 ficheros validados |
+| Completitud bruta / final | 95 % / 100 % |
+| Unicidad | 100 % |
+| Validez | 93 % |
+| Registros limpios / cuarentena | 87 / 13 |
+| Retención | 87 % |
+
+### Distribución de `importe_eur`
+
+| Estadístico | Resultado |
+|---|---:|
+| Media | 70,9866 € |
+| Mediana | 73,44 € |
+| Desviación estándar | 26,3366 € |
+| Percentiles 25 / 75 | 53,805 € / 85,345 € |
+| Mínimo / máximo | 12,50 € / 124,47 € |
+
+### Métricas completas
+
+El archivo `reports/perfilado_calidad.json` contiene el detalle de las métricas y los motivos de rechazo.
+
+```json
 {
   "fecha_generacion": "2026-11-12T20:29:47",
   "integridad_criptografica": {
@@ -796,8 +858,6 @@ Perfilado calidad.json :
     "maximo": 124.47
   }
 }
+```
 
-
-
-Y el informe de calidad :
-
+El informe técnico se genera en `reports/INFORME_CALIDAD_KDD.md`. Revisa sus conclusiones junto con las evidencias de ejecución, especialmente la discrepancia de hashes de la Fase 1.
